@@ -92,6 +92,10 @@ Pentru un mediu de producție real, ar trebui să:
 
 ### 8. Troubleshooting
 
+**Eroare la install (`ERR_NPM_META_FETCH_FAIL` / `ERR_INVALID_THIS` / URLSearchParams):**
+- Cauză: incompatibilitate pnpm + Node.js pe Vercel. Proiectul folosește `engines.node: ">=20.10"` și `packageManager: "pnpm@9.15.0"` în `web/package.json` pentru a evita versiunile problematice.
+- Dacă eroarea persistă: în Vercel → Project Settings → General → Node.js Version, setează explicit **20.x** sau **22.x** (evită versiuni foarte vechi de Node 20).
+
 **Eroare la build:**
 - Verifică că toate dependențele sunt în `package.json`
 - Asigură-te că `pnpm install` rulează fără erori local
