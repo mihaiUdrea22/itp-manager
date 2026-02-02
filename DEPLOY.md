@@ -22,11 +22,10 @@ Asigură-te că ai:
 2. Selectează repository-ul tău (`itp-saas`)
 3. Vercel va detecta automat că este un proiect Next.js
 4. **Configurare importantă:**
-   - **Root Directory**: `web` (selectează din dropdown sau setează manual)
+   - **Root Directory**: `web` (sau lasă gol dacă folosești repo root — `vercel.json` de la root configurează comenzile)
    - **Framework Preset**: Next.js (ar trebui detectat automat)
-   - **Build Command**: `pnpm build` (sau lasă-l gol, Vercel detectează automat)
+   - **Build Command** / **Install Command**: lasă-le gol — proiectul folosește **npm** pe Vercel (setat în `vercel.json`) pentru a evita eroarea pnpm `ERR_INVALID_THIS`.
    - **Output Directory**: `.next` (lasă-l gol, Vercel detectează automat)
-   - **Install Command**: `pnpm install` (sau lasă-l gol)
 
 5. **Variabile de mediu** (dacă folosești Supabase):
    - Dacă ai variabile de mediu, adaugă-le în secțiunea "Environment Variables"
@@ -93,14 +92,13 @@ Pentru un mediu de producție real, ar trebui să:
 ### 8. Troubleshooting
 
 **Eroare la install (`ERR_NPM_META_FETCH_FAIL` / `ERR_INVALID_THIS` / URLSearchParams):**
-- Cauză: incompatibilitate pnpm + Node.js pe Vercel. Proiectul are:
-  - **Root**: `.nvmrc` cu `20` și `package.json` cu `engines.node` + `packageManager` (când deploy-ul rulează `cd web && pnpm install` de la root).
-  - **web**: `engines.node` și `packageManager` în `web/package.json`.
-- Dacă eroarea persistă: în Vercel → Project Settings → General → Node.js Version, setează explicit **20.x** sau **22.x**.
+- Proiectul este configurat să folosească **npm** pe Vercel (nu pnpm), prin `vercel.json` și `web/package-lock.json`, pentru a evita acest bug.
+- Dacă ai suprascris manual Install Command la `pnpm install`, șterge-l sau setează la `npm install` și lasă `vercel.json` să aibă prioritate.
+- Node: în Vercel → Project Settings → General → Node.js Version poți seta **20.x** sau **22.x**.
 
 **Eroare la build:**
 - Verifică că toate dependențele sunt în `package.json`
-- Asigură-te că `pnpm install` rulează fără erori local
+- Local poți rula `pnpm install` sau `npm install` în `web/` — pe Vercel se folosește npm
 
 **Eroare de runtime:**
 - Verifică console-ul browser-ului pentru erori
