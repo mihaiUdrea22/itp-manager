@@ -199,6 +199,18 @@ export default function ReportsPage() {
     }
   }, [reportType, selectedPeriod, inspections, stations, user?.companyId]);
 
+  const chartData = useMemo(() => {
+    const periodSeries = reportType === 'monthly'
+      ? (reportData as { dailyData: { name: string; completed: number; failed: number; scheduled: number }[] }).dailyData.map((d) => ({ name: d.name, value: d.completed + d.failed + d.scheduled }))
+      : (reportData as { monthlyData: { name: string; completed: number; failed: number; scheduled: number }[] }).monthlyData.map((d) => ({ name: d.name, value: d.completed + d.failed + d.scheduled }));
+    return {
+      inspectionsByMonth: periodSeries,
+      inspectionsByStation: reportData.stationData.map((s) => ({ name: s.name, value: s.total })),
+      inspectionsByStatus: reportData.statusData,
+      trendData: periodSeries,
+    };
+  }, [reportData, reportType]);
+
   const handleExport = () => {
     // Simulare export (în producție ar genera un PDF sau Excel)
     const dataStr = JSON.stringify(reportData, null, 2);
@@ -354,26 +366,6 @@ export default function ReportsPage() {
         </h2>
       </div>
 
-      {/* Grafice și Analize Generale */}
-      <div>
-        <h2 className="mb-4 text-xl font-semibold text-gray-900 dark:text-white">
-          Grafice și Analize
-        </h2>
-        <Charts
-          inspectionsByMonth={chartData.inspectionsByMonth}
-          inspectionsByStation={chartData.inspectionsByStation}
-          inspectionsByStatus={chartData.inspectionsByStatus}
-          trendData={chartData.trendData}
-        />
-      </div>
-
-      {/* Grafice pentru Perioada Selectată */}
-      <div>
-        <h2 className="mb-4 text-xl font-semibold text-gray-900 dark:text-white">
-          Raport {reportType === 'monthly' ? 'Lunar' : 'Anual'} - {selectedPeriod}
-        </h2>
-      </div>
-
       {/* Grafice */}
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Grafic evoluție */}
@@ -445,7 +437,7 @@ export default function ReportsPage() {
                 cx="50%"
                 cy="50%"
                 labelLine={false}
-                label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                label={({ name, percent }) => `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`}
                 outerRadius={80}
                 fill="#8884d8"
                 dataKey="value"

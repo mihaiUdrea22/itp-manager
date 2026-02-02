@@ -73,6 +73,8 @@ export default function CalendarPage() {
     lastName: '',
     companyName: '',
     phone: '',
+    email: '',
+    address: '',
   });
   const [newVehicle, setNewVehicle] = useState({
     licensePlate: '',
@@ -438,7 +440,7 @@ export default function CalendarPage() {
     
     setClients(updatedClients.filter((c: any) => c.companyId === user?.companyId));
     setFormData({ ...formData, clientId: newClientEntry.id, vehicleId: '' });
-    setNewClient({ type: 'individual', firstName: '', lastName: '', companyName: '', phone: '' });
+    setNewClient({ type: 'individual', firstName: '', lastName: '', companyName: '', phone: '', email: '', address: '' });
     setShowNewClientForm(false);
   };
 
