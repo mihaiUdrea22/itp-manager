@@ -363,7 +363,7 @@ export default function CalendarPage() {
       stationToUse!.name
     );
 
-    setAppointments(updated.filter((i: Inspection) => i.stationId === selectedStation.id));
+    setAppointments(updated.filter((i: Inspection) => i.stationId === stationToUse!.id));
     setIsModalOpen(false);
   };
 
