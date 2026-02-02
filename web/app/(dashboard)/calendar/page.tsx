@@ -42,6 +42,7 @@ type Inspection = {
   status: 'scheduled' | 'in_progress' | 'passed' | 'failed' | 'cancelled';
   clientName: string;
   vehicleLicensePlate: string;
+  stationName?: string;
 };
 
 export default function CalendarPage() {
