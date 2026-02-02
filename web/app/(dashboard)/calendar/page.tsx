@@ -10,7 +10,8 @@ import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import roLocale from '@fullcalendar/core/locales/ro';
-import type { DateSelectArg, EventDropArg, EventResizeDoneArg } from '@fullcalendar/core';
+import type { DateSelectArg, EventDropArg } from '@fullcalendar/core';
+import type { EventResizeDoneArg } from '@fullcalendar/interaction';
 
 
 type Client = {
