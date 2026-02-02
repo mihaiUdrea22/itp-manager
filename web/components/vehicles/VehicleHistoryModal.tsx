@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { X, FileCheck, Calendar, Clock, CheckCircle2, XCircle } from 'lucide-react';
+import { X, FileCheck, Calendar, Clock, CheckCircle2, XCircle, User } from 'lucide-react';
 import { formatDate, formatDateTime } from '@/lib/utils';
+import { getActivityLogsByEntity } from '@/lib/activityLog';
 import { useAuth } from '@/contexts/AuthContext';
 
 type Vehicle = {
@@ -81,6 +82,20 @@ export function VehicleHistoryModal({ vehicleId, vehicle, onClose }: VehicleHist
       const parsed = JSON.parse(storedClients) as Client[];
       setClients(parsed);
     }
+  };
+
+  const getInspectionActivityInfo = (inspectionId: string) => {
+    const logs = getActivityLogsByEntity('inspection', inspectionId);
+    if (!logs.length) return { createdBy: null, completedBy: null };
+    const sorted = [...logs].sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+    const createdBy = sorted[0];
+    const completedBy = sorted.find((l) => l.action === 'complete') ?? null;
+    return {
+      createdBy: createdBy ? { email: createdBy.userEmail, date: createdBy.timestamp } : null,
+      completedBy: completedBy ? { email: completedBy.userEmail, date: completedBy.timestamp } : null,
+    };
   };
 
   const getStatusBadge = (status: string, result?: string) => {
@@ -166,6 +181,7 @@ export function VehicleHistoryModal({ vehicleId, vehicle, onClose }: VehicleHist
                 {vehicleHistory.map((inspection, index) => {
                   const inspectionDate = inspection.completedDate || inspection.scheduledDate;
                   const station = stations.find(s => s.id === inspection.stationId);
+                  const activity = getInspectionActivityInfo(inspection.id);
                   
                   return (
                     <div key={inspection.id} className="relative flex gap-4 pb-6">
@@ -198,6 +214,23 @@ export function VehicleHistoryModal({ vehicleId, vehicle, onClose }: VehicleHist
                                     : 'Dată necunoscută'}
                                 </span>
                               </div>
+                              
+                              {activity.createdBy && (
+                                <div className="flex items-center gap-2">
+                                  <User className="h-4 w-4 text-gray-400" />
+                                  <span className="text-gray-600 dark:text-gray-400">
+                                    Înregistrat de: <span className="font-medium text-gray-900 dark:text-white">{activity.createdBy.email}</span> la {formatDateTime(activity.createdBy.date)}
+                                  </span>
+                                </div>
+                              )}
+                              {activity.completedBy && activity.completedBy.date !== activity.createdBy?.date && (
+                                <div className="flex items-center gap-2">
+                                  <User className="h-4 w-4 text-gray-400" />
+                                  <span className="text-gray-600 dark:text-gray-400">
+                                    Finalizat de: <span className="font-medium text-gray-900 dark:text-white">{activity.completedBy.email}</span> la {formatDateTime(activity.completedBy.date)}
+                                  </span>
+                                </div>
+                              )}
                               
                               {inspection.clientName && (
                                 <div className="flex items-center gap-2">

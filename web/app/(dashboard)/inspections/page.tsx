@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/Card';
-import { FileCheck, Plus, Search, Filter, CheckCircle, XCircle, Clock, Calendar, X } from 'lucide-react';
+import { FileCheck, Plus, Search, Filter, CheckCircle, XCircle, Clock, Calendar, X, Camera, Trash2 } from 'lucide-react';
 import { InspectionStatus, InspectionResult } from '@/types';
 import { formatDate, formatDateTime } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -38,6 +38,7 @@ type Inspection = {
   vehicleLicensePlate: string;
   clientName: string;
   stationName: string;
+  photos?: string[];
 };
 
 export default function InspectionsPage() {
@@ -76,6 +77,16 @@ export default function InspectionsPage() {
     address: '',
   });
   const [newVehicleData, setNewVehicleData] = useState({
+    licensePlate: '',
+    make: '',
+    model: '',
+    year: '',
+    type: 'car',
+    fuelType: 'petrol',
+  });
+  // Mașină nouă pentru client existent în "Adaugă ITP Acum"
+  const [showNewVehicleInNowForm, setShowNewVehicleInNowForm] = useState(false);
+  const [nowFormNewVehicleData, setNowFormNewVehicleData] = useState({
     licensePlate: '',
     make: '',
     model: '',
@@ -428,16 +439,7 @@ export default function InspectionsPage() {
 
   // Handler pentru începerea inspecției
   const handleStartInspection = (inspection: Inspection) => {
-    const storedInspections = localStorage.getItem('inspections');
-    if (!storedInspections) return;
-    
-    const allInspections = JSON.parse(storedInspections) as Inspection[];
-    const updated = allInspections.map((i) => 
-      i.id === inspection.id ? { ...i, status: 'in_progress' as InspectionStatus } : i
-    );
-    localStorage.setItem('inspections', JSON.stringify(updated));
-    
-    // Log activity
+    updateInspectionInStorage(inspection.id, { status: 'in_progress' });
     logActivity(
       user?.email || 'unknown',
       user?.email || 'unknown',
@@ -450,8 +452,89 @@ export default function InspectionsPage() {
       inspection.stationId,
       inspection.stationName
     );
-    
     loadInspections();
+    if (selectedInspection?.id === inspection.id) {
+      setSelectedInspection({ ...inspection, status: 'in_progress' });
+    }
+  };
+
+  const updateInspectionInStorage = (id: string, patch: Partial<Inspection>) => {
+    const stored = localStorage.getItem('inspections');
+    if (!stored) return;
+    const all = JSON.parse(stored) as Inspection[];
+    const updated = all.map((i) => (i.id === id ? { ...i, ...patch } : i));
+    localStorage.setItem('inspections', JSON.stringify(updated));
+  };
+
+  const handleCompleteInspection = (inspection: Inspection, result: 'passed' | 'failed') => {
+    const now = new Date();
+    const completedDate = now.toISOString();
+    const periodMonths = inspection.periodMonths || 12;
+    const nextInspectionDate = new Date(now);
+    nextInspectionDate.setMonth(nextInspectionDate.getMonth() + periodMonths);
+    updateInspectionInStorage(inspection.id, {
+      status: result,
+      result,
+      completedDate,
+      nextInspectionDate: nextInspectionDate.toISOString(),
+    });
+    logActivity(
+      user?.email || 'unknown',
+      user?.email || 'unknown',
+      userRole || 'unknown',
+      'complete',
+      'inspection',
+      inspection.id,
+      `ITP ${inspection.vehicleLicensePlate}`,
+      `ITP ${result === 'passed' ? 'trecut' : 'eșuat'}: ${inspection.vehicleLicensePlate}`,
+      inspection.stationId,
+      inspection.stationName
+    );
+    loadInspections();
+    if (selectedInspection?.id === inspection.id) {
+      setSelectedInspection({
+        ...inspection,
+        status: result,
+        result,
+        completedDate,
+        nextInspectionDate: nextInspectionDate.toISOString(),
+      });
+    }
+  };
+
+  const handleAddPhotos = (inspection: Inspection, files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const maxPhotos = 5;
+    const toAdd = Math.min(files.length, maxPhotos - (inspection.photos?.length ?? 0));
+    if (toAdd <= 0) {
+      alert(`Poți adăuga maxim ${maxPhotos} poze per inspecție.`);
+      return;
+    }
+    const reader = (file: File): Promise<string> =>
+      new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result as string);
+        r.onerror = reject;
+        r.readAsDataURL(file);
+      });
+    Promise.all(Array.from(files).slice(0, toAdd).map(reader)).then((dataUrls) => {
+      const existing = inspection.photos ?? [];
+      const newPhotos = [...existing, ...dataUrls].slice(0, maxPhotos);
+      updateInspectionInStorage(inspection.id, { photos: newPhotos });
+      loadInspections();
+      if (selectedInspection?.id === inspection.id) {
+        setSelectedInspection({ ...inspection, photos: newPhotos });
+      }
+    });
+  };
+
+  const handleRemovePhoto = (inspection: Inspection, index: number) => {
+    const photos = (inspection.photos ?? []).filter((_, i) => i !== index);
+    updateInspectionInStorage(inspection.id, { photos });
+    loadInspections();
+    if (selectedInspection?.id === inspection.id) {
+      setSelectedInspection({ ...inspection, photos });
+    }
   };
 
   const handleAddInspectionNow = (e: React.FormEvent) => {
@@ -475,17 +558,67 @@ export default function InspectionsPage() {
       alert('Te rugăm să selectezi o stație pentru a crea inspecția.');
       return;
     }
-    if (!nowFormData.clientId || !nowFormData.vehicleId) return;
+    if (!nowFormData.clientId) return;
 
     const client = clients.find((c) => c.id === nowFormData.clientId);
-    const vehicle = vehicles.find((v) => v.id === nowFormData.vehicleId);
-    if (!client || !vehicle) return;
+    if (!client) return;
 
-    // Verifică dacă mașina are ITP valabil
-    if (hasValidInspection(vehicle.id)) {
-      alert('Această mașină are deja un ITP valabil. Te rugăm să programezi un ITP nou în loc să adaugi unul direct.');
-      return;
+    let vehicle: (Vehicle & { year?: number; type?: string; fuelType?: string }) | null = null;
+    if (showNewVehicleInNowForm) {
+      if (!nowFormNewVehicleData.licensePlate || !nowFormNewVehicleData.make || !nowFormNewVehicleData.model || !nowFormNewVehicleData.year) {
+        alert('Te rugăm să completezi toate câmpurile pentru mașina nouă.');
+        return;
+      }
+      let currentCompanyId = user?.companyId;
+      if (!currentCompanyId && userRole === 'engineer' && selectedStation) {
+        currentCompanyId = selectedStation.companyId;
+      }
+      if (!currentCompanyId) {
+        alert('Eroare: Nu s-a putut identifica compania.');
+        return;
+      }
+      const newVehicle = {
+        id: `vehicle-${Date.now()}`,
+        companyId: currentCompanyId,
+        clientId: client.id,
+        licensePlate: nowFormNewVehicleData.licensePlate,
+        make: nowFormNewVehicleData.make,
+        model: nowFormNewVehicleData.model,
+        year: parseInt(nowFormNewVehicleData.year, 10),
+        type: nowFormNewVehicleData.type,
+        fuelType: nowFormNewVehicleData.fuelType,
+      };
+      const storedVehicles = localStorage.getItem('vehicles');
+      const existingVehicles = storedVehicles ? JSON.parse(storedVehicles) : [];
+      localStorage.setItem('vehicles', JSON.stringify([...existingVehicles, newVehicle]));
+      logActivity(
+        user?.email || 'unknown',
+        user?.email || 'unknown',
+        userRole || 'unknown',
+        'create',
+        'vehicle',
+        newVehicle.id,
+        newVehicle.licensePlate,
+        `Mașină creată: ${newVehicle.licensePlate}`,
+        stationToUse!.id,
+        stationToUse!.name
+      );
+      loadVehicles();
+      vehicle = newVehicle;
+    } else {
+      if (!nowFormData.vehicleId) {
+        alert('Te rugăm să selectezi o mașină sau să adaugi una nouă.');
+        return;
+      }
+      const found = vehicles.find((v) => v.id === nowFormData.vehicleId);
+      if (!found) return;
+      if (hasValidInspection(found.id)) {
+        alert('Această mașină are deja un ITP valabil. Te rugăm să programezi un ITP nou în loc să adaugi unul direct.');
+        return;
+      }
+      vehicle = found;
     }
+    if (!vehicle) return;
 
     const clientName =
       client.type === 'individual'
@@ -538,6 +671,8 @@ export default function InspectionsPage() {
     loadInspections();
 
     setNowFormData({ clientId: '', vehicleId: '', periodMonths: '12', result: 'passed' });
+    setShowNewVehicleInNowForm(false);
+    setNowFormNewVehicleData({ licensePlate: '', make: '', model: '', year: '', type: 'car', fuelType: 'petrol' });
     setShowAddNowForm(false);
   };
 
@@ -990,24 +1125,102 @@ export default function InspectionsPage() {
                 <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
                   Mașină
                 </label>
-                <select
-                  value={nowFormData.vehicleId}
-                  onChange={(e) => setNowFormData({ ...nowFormData, vehicleId: e.target.value })}
-                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
-                  required
-                  disabled={!nowFormData.clientId}
-                >
-                  <option value="">Selectează mașina</option>
-                  {vehicles
-                    .filter((v) => v.clientId === nowFormData.clientId)
-                    .map((vehicle) => (
-                      <option key={vehicle.id} value={vehicle.id}>
-                        {vehicle.licensePlate} • {vehicle.make} {vehicle.model}
-                        {hasValidInspection(vehicle.id) ? ' (ITP Valabil)' : ''}
-                      </option>
-                    ))}
-                </select>
-                {nowFormData.vehicleId && hasValidInspection(nowFormData.vehicleId) && (
+                {!showNewVehicleInNowForm ? (
+                  <div className="flex gap-2">
+                    <select
+                      value={nowFormData.vehicleId}
+                      onChange={(e) => setNowFormData({ ...nowFormData, vehicleId: e.target.value })}
+                      className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                      required={!showNewVehicleInNowForm}
+                      disabled={!nowFormData.clientId}
+                    >
+                      <option value="">Selectează mașina existentă</option>
+                      {vehicles
+                        .filter((v) => v.clientId === nowFormData.clientId)
+                        .map((vehicle) => (
+                          <option key={vehicle.id} value={vehicle.id}>
+                            {vehicle.licensePlate} • {vehicle.make} {vehicle.model}
+                            {hasValidInspection(vehicle.id) ? ' (ITP Valabil)' : ''}
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => setShowNewVehicleInNowForm(true)}
+                      disabled={!nowFormData.clientId}
+                      className="rounded-lg border border-green-300 bg-green-50 px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-100 dark:border-green-700 dark:bg-green-900/20 dark:text-green-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      + Mașină nouă
+                    </button>
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-gray-200 p-4 dark:border-gray-700 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-gray-900 dark:text-white">Mașină nouă pentru client</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowNewVehicleInNowForm(false);
+                          setNowFormNewVehicleData({ licensePlate: '', make: '', model: '', year: '', type: 'car', fuelType: 'petrol' });
+                        }}
+                        className="text-xs font-medium text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200"
+                      >
+                        Înapoi la mașini existente
+                      </button>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <input
+                        placeholder="Număr înmatriculare *"
+                        value={nowFormNewVehicleData.licensePlate}
+                        onChange={(e) => setNowFormNewVehicleData({ ...nowFormNewVehicleData, licensePlate: e.target.value })}
+                        className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                      />
+                      <input
+                        placeholder="An *"
+                        type="number"
+                        value={nowFormNewVehicleData.year}
+                        onChange={(e) => setNowFormNewVehicleData({ ...nowFormNewVehicleData, year: e.target.value })}
+                        className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                      />
+                      <input
+                        placeholder="Marcă *"
+                        value={nowFormNewVehicleData.make}
+                        onChange={(e) => setNowFormNewVehicleData({ ...nowFormNewVehicleData, make: e.target.value })}
+                        className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                      />
+                      <input
+                        placeholder="Model *"
+                        value={nowFormNewVehicleData.model}
+                        onChange={(e) => setNowFormNewVehicleData({ ...nowFormNewVehicleData, model: e.target.value })}
+                        className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                      />
+                      <select
+                        value={nowFormNewVehicleData.type}
+                        onChange={(e) => setNowFormNewVehicleData({ ...nowFormNewVehicleData, type: e.target.value })}
+                        className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                      >
+                        <option value="car">Autoturism</option>
+                        <option value="truck">Autocamion</option>
+                        <option value="motorcycle">Motocicletă</option>
+                        <option value="bus">Autobuz</option>
+                        <option value="trailer">Remorcă</option>
+                      </select>
+                      <select
+                        value={nowFormNewVehicleData.fuelType}
+                        onChange={(e) => setNowFormNewVehicleData({ ...nowFormNewVehicleData, fuelType: e.target.value })}
+                        className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                      >
+                        <option value="petrol">Benzină</option>
+                        <option value="diesel">Diesel</option>
+                        <option value="hybrid">Hybrid</option>
+                        <option value="electric">Electric</option>
+                        <option value="lpg">LPG</option>
+                        <option value="cng">CNG</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+                {!showNewVehicleInNowForm && nowFormData.vehicleId && hasValidInspection(nowFormData.vehicleId) && (
                   <div className="mt-2 rounded-lg border border-orange-300 bg-orange-50 p-3 text-sm text-orange-800 dark:border-orange-700 dark:bg-orange-900/20 dark:text-orange-400">
                     <p className="font-medium">⚠️ Această mașină are deja un ITP valabil.</p>
                     <p className="mt-1">Nu poți adăuga un ITP nou direct. Te rugăm să folosești formularul de programare pentru a programa un ITP nou.</p>
@@ -1053,7 +1266,7 @@ export default function InspectionsPage() {
               </button>
               <button
                 type="submit"
-                disabled={nowFormData.vehicleId && hasValidInspection(nowFormData.vehicleId)}
+                disabled={!showNewVehicleInNowForm && !!nowFormData.vehicleId && hasValidInspection(nowFormData.vehicleId)}
                 className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Adaugă ITP
@@ -1543,6 +1756,90 @@ export default function InspectionsPage() {
                     </p>
                   </div>
                 )}
+              </div>
+
+              {/* Schimbă status */}
+              <div className="border-t border-gray-200 pt-4 dark:border-gray-800">
+                <p className="mb-3 text-sm font-medium text-gray-700 dark:text-gray-300">Schimbă status</p>
+                <div className="flex flex-wrap gap-2">
+                  {selectedInspection.status === 'scheduled' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleStartInspection(selectedInspection);
+                      }}
+                      className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                    >
+                      Începe inspecția
+                    </button>
+                  )}
+                  {selectedInspection.status === 'in_progress' && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => handleCompleteInspection(selectedInspection, 'passed')}
+                        className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700"
+                      >
+                        Trecut
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleCompleteInspection(selectedInspection, 'failed')}
+                        className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
+                      >
+                        Eșuat
+                      </button>
+                    </>
+                  )}
+                  {(selectedInspection.status === 'passed' || selectedInspection.status === 'failed') && (
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      Inspecția este finalizată. Rezultat: {selectedInspection.result === 'passed' ? 'Trecut' : 'Eșuat'}.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Poze */}
+              <div className="border-t border-gray-200 pt-4 dark:border-gray-800">
+                <p className="mb-3 text-sm font-medium text-gray-700 dark:text-gray-300">Poze</p>
+                <div className="flex flex-wrap gap-3">
+                  {(selectedInspection.photos ?? []).map((dataUrl, idx) => (
+                    <div key={idx} className="relative group">
+                      <img
+                        src={dataUrl}
+                        alt={`Poza ${idx + 1}`}
+                        className="h-20 w-20 rounded-lg border border-gray-200 object-cover dark:border-gray-700"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleRemovePhoto(selectedInspection, idx)}
+                        className="absolute -top-2 -right-2 rounded-full bg-red-500 p-1 text-white opacity-0 transition group-hover:opacity-100 focus:opacity-100"
+                        title="Șterge poza"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                  {(selectedInspection.photos?.length ?? 0) < 5 && (
+                    <label className="flex h-20 w-20 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 dark:border-gray-600 dark:bg-gray-800">
+                      <Camera className="h-6 w-6 text-gray-400" />
+                      <span className="mt-1 text-xs text-gray-500 dark:text-gray-400">Adaugă</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={(e) => {
+                          handleAddPhotos(selectedInspection, e.target.files);
+                          e.target.value = '';
+                        }}
+                      />
+                    </label>
+                  )}
+                </div>
+                <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  Maxim 5 poze per inspecție. Pozele sunt stocate local.
+                </p>
               </div>
             </div>
             <div className="flex justify-end gap-3 border-t border-gray-200 p-6 dark:border-gray-800">

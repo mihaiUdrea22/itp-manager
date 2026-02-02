@@ -26,6 +26,15 @@ export default function ClientsPage() {
   const [vehiclesDraft, setVehiclesDraft] = useState([
     { licensePlate: '', make: '', model: '', year: '', type: 'car', fuelType: 'petrol' },
   ]);
+  // Opțional: programare ITP sau inspecție pe loc pentru o mașină adăugată
+  const [scheduleITP, setScheduleITP] = useState(false);
+  const [itpMode, setItpMode] = useState<'schedule' | 'now'>('schedule');
+  const [itpVehicleIndex, setItpVehicleIndex] = useState(0);
+  const [itpScheduledDate, setItpScheduledDate] = useState('');
+  const [itpTimeSlot, setItpTimeSlot] = useState('');
+  const [itpPeriodMonths, setItpPeriodMonths] = useState('12');
+  const [itpStationId, setItpStationId] = useState('');
+  const [itpResult, setItpResult] = useState<'passed' | 'failed'>('passed');
 
   useEffect(() => {
     loadClients();
@@ -78,6 +87,66 @@ export default function ClientsPage() {
     return [];
   };
 
+  const validVehiclesFromDraft = vehiclesDraft.filter(
+    (v) => v.licensePlate && v.make && v.model && v.year
+  );
+
+  const generateTimeSlots = (): string[] => {
+    const slots: string[] = [];
+    let hour = 9;
+    let minute = 0;
+    while (hour < 18 || (hour === 18 && minute <= 15)) {
+      const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+      slots.push(timeStr);
+      minute += 45;
+      if (minute >= 60) {
+        hour += 1;
+        minute -= 60;
+      }
+    }
+    return slots;
+  };
+
+  const isSlotAvailable = (date: string, timeSlot: string, stationId: string): boolean => {
+    if (!date || !timeSlot) return false;
+    const slotStart = new Date(`${date}T${timeSlot}:00`);
+    const slotEnd = new Date(slotStart.getTime() + 45 * 60000);
+    const dayOfWeek = slotStart.getDay();
+    if (dayOfWeek === 0) return false;
+    const storedInspections = localStorage.getItem('inspections');
+    if (!storedInspections) return true;
+    const allInspections = JSON.parse(storedInspections) as { stationId: string; scheduledDate: string; status: string }[];
+    const stationInspections = allInspections.filter(
+      (i) => i.stationId === stationId && i.status === 'scheduled'
+    );
+    for (const inspection of stationInspections) {
+      if (!inspection.scheduledDate) continue;
+      const inspectionStart = new Date(inspection.scheduledDate);
+      const inspectionEnd = new Date(inspectionStart.getTime() + 45 * 60000);
+      if (
+        (slotStart >= inspectionStart && slotStart < inspectionEnd) ||
+        (slotEnd > inspectionStart && slotEnd <= inspectionEnd) ||
+        (slotStart <= inspectionStart && slotEnd >= inspectionEnd)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const getAvailableSlotsForITP = (date: string): string[] => {
+    if (!date) return [];
+    let stationId: string | null = null;
+    if (userRole === 'engineer' && selectedStation) {
+      stationId = selectedStation.id;
+    } else if (userRole === 'manager' && itpStationId) {
+      stationId = itpStationId;
+    }
+    if (!stationId) return [];
+    const allSlots = generateTimeSlots();
+    return allSlots.filter((slot) => isSlotAvailable(date, slot, stationId));
+  };
+
   const handleAddClient = (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -106,6 +175,22 @@ export default function ClientsPage() {
       alert('Eroare: Nu s-a putut identifica compania. Te rugăm să reîmprospătezi pagina.');
       return;
     }
+
+    if (scheduleITP) {
+      const stationOk = userRole === 'manager' ? !!itpStationId : !!selectedStation;
+      if (!stationOk) {
+        alert(userRole === 'manager'
+          ? 'Te rugăm să selectezi stația pentru ITP.'
+          : 'Te rugăm să selectezi o stație în header pentru ITP.');
+        return;
+      }
+      if (itpMode === 'schedule') {
+        if (!itpScheduledDate || !itpTimeSlot) {
+          alert('Te rugăm să completezi data și slotul orar pentru programarea ITP.');
+          return;
+        }
+      }
+    }
     
     const newClient = {
       id: `client-${Date.now()}`,
@@ -132,12 +217,13 @@ export default function ClientsPage() {
     const validVehicles = vehiclesDraft.filter(
       (v) => v.licensePlate && v.make && v.model && v.year
     );
+    let newVehicles: { id: string; clientId: string; licensePlate: string; make: string; model: string; companyId: string }[] = [];
     if (validVehicles.length > 0) {
       const storedVehicles = localStorage.getItem('vehicles');
       const existingVehicles = storedVehicles ? JSON.parse(storedVehicles) : [];
-        const newVehicles = validVehicles.map((v) => ({
+      const created = validVehicles.map((v) => ({
         id: `vehicle-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        companyId: currentCompanyId,
+        companyId: currentCompanyId!,
         clientId: newClient.id,
         licensePlate: v.licensePlate,
         make: v.make,
@@ -146,10 +232,10 @@ export default function ClientsPage() {
         type: v.type,
         fuelType: v.fuelType,
       }));
-      localStorage.setItem('vehicles', JSON.stringify([...existingVehicles, ...newVehicles]));
+      newVehicles = created;
+      localStorage.setItem('vehicles', JSON.stringify([...existingVehicles, ...created]));
       
-      // Log activity pentru mașini
-      newVehicles.forEach((vehicle) => {
+      created.forEach((vehicle) => {
         logActivity(
           user?.email || 'unknown',
           user?.email || 'unknown',
@@ -163,6 +249,83 @@ export default function ClientsPage() {
           selectedStation?.name
         );
       });
+    }
+
+    // Opțional: programare ITP sau inspecție pe loc pentru o mașină adăugată
+    if (scheduleITP && validVehicles.length > 0) {
+      const stationToUse = userRole === 'engineer'
+        ? selectedStation
+        : stations.find((s) => s.id === itpStationId);
+      if (stationToUse && itpVehicleIndex >= 0 && itpVehicleIndex < newVehicles.length) {
+        const vehicle = newVehicles[itpVehicleIndex];
+        const clientName = newClient.type === 'individual'
+          ? `${newClient.firstName || ''} ${newClient.lastName || ''}`.trim()
+          : newClient.companyName || 'Client';
+        const storedInspections = localStorage.getItem('inspections');
+        const existingInspections = storedInspections ? JSON.parse(storedInspections) : [];
+
+        if (itpMode === 'schedule' && itpScheduledDate && itpTimeSlot) {
+          const scheduledDateTime = `${itpScheduledDate}T${itpTimeSlot}:00`;
+          const newInspection = {
+            id: `inspection-${Date.now()}`,
+            stationId: stationToUse.id,
+            vehicleId: vehicle.id,
+            clientId: newClient.id,
+            scheduledDate: new Date(scheduledDateTime).toISOString(),
+            status: 'scheduled',
+            periodMonths: parseInt(itpPeriodMonths, 10) as 6 | 12 | 24,
+            vehicleLicensePlate: vehicle.licensePlate,
+            clientName,
+            stationName: stationToUse.name,
+          };
+          localStorage.setItem('inspections', JSON.stringify([...existingInspections, newInspection]));
+          logActivity(
+            user?.email || 'unknown',
+            user?.email || 'unknown',
+            userRole || 'unknown',
+            'schedule',
+            'inspection',
+            newInspection.id,
+            `ITP ${vehicle.licensePlate}`,
+            `ITP programat: ${vehicle.licensePlate} pentru ${clientName}`,
+            stationToUse.id,
+            stationToUse.name
+          );
+        } else if (itpMode === 'now') {
+          const now = new Date();
+          const completedDate = now.toISOString();
+          const nextInspectionDate = new Date(now);
+          nextInspectionDate.setMonth(nextInspectionDate.getMonth() + parseInt(itpPeriodMonths, 10));
+          const newInspection = {
+            id: `inspection-${Date.now()}`,
+            stationId: stationToUse.id,
+            vehicleId: vehicle.id,
+            clientId: newClient.id,
+            scheduledDate: completedDate,
+            completedDate,
+            status: itpResult,
+            result: itpResult,
+            periodMonths: parseInt(itpPeriodMonths, 10) as 6 | 12 | 24,
+            nextInspectionDate: nextInspectionDate.toISOString(),
+            vehicleLicensePlate: vehicle.licensePlate,
+            clientName,
+            stationName: stationToUse.name,
+          };
+          localStorage.setItem('inspections', JSON.stringify([...existingInspections, newInspection]));
+          logActivity(
+            user?.email || 'unknown',
+            user?.email || 'unknown',
+            userRole || 'unknown',
+            'complete',
+            'inspection',
+            newInspection.id,
+            `ITP ${vehicle.licensePlate}`,
+            `ITP ${itpResult === 'passed' ? 'trecut' : 'eșuat'}: ${vehicle.licensePlate}`,
+            stationToUse.id,
+            stationToUse.name
+          );
+        }
+      }
     }
 
     // Log activity pentru client
@@ -196,6 +359,14 @@ export default function ClientsPage() {
       address: '',
     });
     setVehiclesDraft([{ licensePlate: '', make: '', model: '', year: '', type: 'car', fuelType: 'petrol' }]);
+    setScheduleITP(false);
+    setItpMode('schedule');
+    setItpVehicleIndex(0);
+    setItpScheduledDate('');
+    setItpTimeSlot('');
+    setItpPeriodMonths('12');
+    setItpStationId('');
+    setItpResult('passed');
     setShowAddForm(false);
     loadClients();
   };
@@ -444,6 +615,182 @@ export default function ClientsPage() {
                 ))}
               </div>
             </div>
+
+            {/* Adaugă / programează ITP (opțional) - pentru una dintre mașinile adăugate */}
+            {validVehiclesFromDraft.length > 0 && (
+              <div className="rounded-lg border border-dashed border-gray-300 p-4 dark:border-gray-700">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="scheduleITP"
+                    checked={scheduleITP}
+                    onChange={(e) => {
+                      setScheduleITP(e.target.checked);
+                      if (!e.target.checked) {
+                        setItpScheduledDate('');
+                        setItpTimeSlot('');
+                      }
+                    }}
+                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <label htmlFor="scheduleITP" className="text-sm font-medium text-gray-900 dark:text-white">
+                    Adaugă ITP pentru una dintre mașinile de mai sus
+                  </label>
+                </div>
+                {scheduleITP && (
+                  <div className="mt-4 space-y-4">
+                    <div className="flex flex-wrap gap-4">
+                      <label className="flex cursor-pointer items-center gap-2">
+                        <input
+                          type="radio"
+                          name="itpMode"
+                          checked={itpMode === 'schedule'}
+                          onChange={() => setItpMode('schedule')}
+                          className="h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Programez ITP</span>
+                      </label>
+                      <label className="flex cursor-pointer items-center gap-2">
+                        <input
+                          type="radio"
+                          name="itpMode"
+                          checked={itpMode === 'now'}
+                          onChange={() => setItpMode('now')}
+                          className="h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Fac inspecția direct</span>
+                      </label>
+                    </div>
+                    {userRole === 'manager' && (
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                          Stație *
+                        </label>
+                        <select
+                          value={itpStationId}
+                          onChange={(e) => {
+                            setItpStationId(e.target.value);
+                            setItpScheduledDate('');
+                            setItpTimeSlot('');
+                          }}
+                          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                          required
+                        >
+                          <option value="">Selectează stația</option>
+                          {stations
+                            .filter((s) => s.companyId === user?.companyId)
+                            .map((station) => (
+                              <option key={station.id} value={station.id}>
+                                {station.name}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                    )}
+                    {userRole === 'engineer' && selectedStation && (
+                      <p className="text-sm text-gray-600 dark:text-gray-400">
+                        Stație: <span className="font-medium">{selectedStation.name}</span>
+                      </p>
+                    )}
+                    <div>
+                      <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        Mașină *
+                      </label>
+                      <select
+                        value={itpVehicleIndex}
+                        onChange={(e) => setItpVehicleIndex(parseInt(e.target.value, 10))}
+                        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                      >
+                        {validVehiclesFromDraft.map((v, idx) => (
+                          <option key={idx} value={idx}>
+                            {v.licensePlate} • {v.make} {v.model}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        Perioadă ITP
+                      </label>
+                      <select
+                        value={itpPeriodMonths}
+                        onChange={(e) => setItpPeriodMonths(e.target.value)}
+                        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                      >
+                        <option value="6">6 luni</option>
+                        <option value="12">12 luni</option>
+                        <option value="24">24 luni</option>
+                      </select>
+                    </div>
+                    {itpMode === 'schedule' && (
+                      <>
+                        <div>
+                          <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                            Data *
+                          </label>
+                          <input
+                            type="date"
+                            value={itpScheduledDate}
+                            onChange={(e) => {
+                              setItpScheduledDate(e.target.value);
+                              setItpTimeSlot('');
+                            }}
+                            min={new Date().toISOString().split('T')[0]}
+                            className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                            required={itpMode === 'schedule'}
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                            Slot orar *
+                          </label>
+                          <select
+                            value={itpTimeSlot}
+                            onChange={(e) => setItpTimeSlot(e.target.value)}
+                            className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                            required={itpMode === 'schedule'}
+                            disabled={!itpScheduledDate}
+                          >
+                            <option value="">Selectează slot</option>
+                            {getAvailableSlotsForITP(itpScheduledDate).map((slot) => {
+                              const end = new Date(`2000-01-01T${slot}:00`);
+                              end.setMinutes(end.getMinutes() + 45);
+                              const endStr = `${end.getHours().toString().padStart(2, '0')}:${end.getMinutes().toString().padStart(2, '0')}`;
+                              return (
+                                <option key={slot} value={slot}>
+                                  {slot} - {endStr}
+                                </option>
+                              );
+                            })}
+                          </select>
+                          {itpScheduledDate && getAvailableSlotsForITP(itpScheduledDate).length === 0 && (
+                            <p className="mt-1 text-xs text-orange-600 dark:text-orange-400">
+                              Nu sunt sloturi disponibile pentru această dată.
+                            </p>
+                          )}
+                        </div>
+                      </>
+                    )}
+                    {itpMode === 'now' && (
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                          Rezultat inspecție *
+                        </label>
+                        <select
+                          value={itpResult}
+                          onChange={(e) => setItpResult(e.target.value as 'passed' | 'failed')}
+                          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                        >
+                          <option value="passed">Trecut</option>
+                          <option value="failed">Eșuat</option>
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="flex gap-2">
               <button
                 type="button"
