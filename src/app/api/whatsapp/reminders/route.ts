@@ -12,7 +12,8 @@ function createAdminClient() {
   )
 }
 
-async function getWhatsAppCredentials(supabase: ReturnType<typeof createClient>, stationId: string) {
+async function getWhatsAppCredentials(stationId: string) {
+  const supabase = createAdminClient()
   const { data } = await supabase
     .from('station_settings')
     .select('key, value')
@@ -68,7 +69,7 @@ export async function GET(request: NextRequest) {
     for (const stationObj of allStations) {
       // Get WhatsApp credentials for this station
       const { phoneNumberId: PHONE_NUMBER_ID, accessToken: ACCESS_TOKEN } =
-        await getWhatsAppCredentials(supabase, stationObj.id)
+        await getWhatsAppCredentials(stationObj.id)
 
       if (!PHONE_NUMBER_ID || !ACCESS_TOKEN) continue
 
